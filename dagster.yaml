@@ -1,0 +1,24 @@
+# Dagster instance configuration, shared by the webserver and daemon.
+#
+# All Dagster system state (runs, events, schedules) is stored in
+# PostgreSQL rather than local disk, so the webserver and daemon containers
+# stay stateless and can be recreated freely. Connection fields live under
+# `postgres_db:`; Dagster autocreates its tables in the target database on
+# first boot (should_autocreate_tables defaults to true).
+
+storage:
+  postgres:
+    postgres_db:
+      username: { env: DAGSTER_POSTGRES_USER }
+      password: { env: DAGSTER_POSTGRES_PASSWORD }
+      hostname: { env: DAGSTER_POSTGRES_HOST }
+      db_name: { env: DAGSTER_POSTGRES_DB }
+      port: 5432
+
+run_launcher:
+  module: dagster._core.launcher
+  class: DefaultRunLauncher
+
+run_coordinator:
+  module: dagster._core.run_coordinator
+  class: DefaultRunCoordinator

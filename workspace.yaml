@@ -1,0 +1,11 @@
+# Tells the Dagster webserver/daemon where to load pipeline code from.
+#
+# Instead of loading our code in-process (python_file), we point at the
+# gRPC code server container ("pipeline-code" service in docker-compose).
+# That keeps the webserver and daemon lightweight and lets the pipeline
+# code be rebuilt/redeployed without restarting them.
+
+load_from:
+  - grpc_server:
+      host: pipeline-code
+      port: 4000
