@@ -60,7 +60,8 @@ class FetchQuotesConfig(Config):
         "free /quote endpoint. Symbols with no data (invalid ticker, or "
         "all-zero response) are skipped with a warning; transient API "
         "failures are retried with backoff."
-    )
+    ),
+    retry_policy=RetryPolicy(max_retries=3, delay=30),
 )
 def fetch_quotes(
     context, finnhub: FinnhubApiResource, config: FetchQuotesConfig
@@ -126,7 +127,8 @@ def fetch_quotes(
         "Upsert the fetched quotes into the PostgreSQL stock_quotes table "
         "(one row per symbol per day). If no quotes were fetched, the op "
         "skips gracefully instead of writing junk or failing the run."
-    )
+    ),
+    retry_policy=RetryPolicy(max_retries=3, delay=30),
 )
 def load_quotes(context, quotes: list[Quote]) -> tuple[int, int]:
     """Upsert the fetched quotes, or skip cleanly if nothing was fetched."""
