@@ -1,0 +1,130 @@
+# Dockerized stock data pipeline: Finnhub -> Dagster -> PostgreSQL.
+#
+#   docker compose up -d --build   -> starts everything
+#   UI: http://localhost:3000
+#
+# Services:
+#   postgres        - one instance, two databases (dagster system + stockdata)
+#   pipeline-code   - serves our pipeline code over gRPC
+#   dagster-webserver - Dagster UI (port 3000)
+#   dagster-daemon    - scheduler + run coordinator (makes hourly runs fire)
+
+name: stockflow
+
+x-dagster-image: &dagster-image
+  image: stockflow/dagster:latest
+  build:
+    context: .
+    dockerfile: Dockerfile
+  environment: &dagster-env
+    # Dagster instance storage (dagster.yaml reads these)
+    DAGSTER_POSTGRES_USER: ${POSTGRES_USER}
+    DAGSTER_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    DAGSTER_POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+    DAGSTER_POSTGRES_DB: ${POSTGRES_DB:-dagster}
+    # Pipeline configuration (.env.example documents all of these)
+    FINNHUB_API_KEY: ${FINNHUB_API_KEY}
+    STOCK_SYMBOLS: ${STOCK_SYMBOLS:-AAPL,MSFT,GOOGL,AMZN,TSLA}
+    FINNHUB_TIMEOUT: ${FINNHUB_TIMEOUT:-10}
+    FINNHUB_MAX_RETRIES: ${FINNHUB_MAX_RETRIES:-3}
+    FINNHUB_RETRY_BACKOFF: ${FINNHUB_RETRY_BACKOFF:-1}
+    FINNHUB_INTER_REQUEST_DELAY: ${FINNHUB_INTER_REQUEST_DELAY:-1.1}
+    STOCK_DB_NAME: ${STOCK_DB_NAME:-stockdata}
+    POSTGRES_USER: ${POSTGRES_USER}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+    POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+  depends_on:
+    postgres:
+      condition: service_healthy
+  networks:
+    - stockflow-net
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # Dagster system storage lives here; init.sql also creates `stockdata`.
+      POSTGRES_DB: ${POSTGRES_DB:-dagster}
+    volumes:
+      - stockflow-pgdata:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB:-dagster}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    # Not exposed to the host by default; the UI port is the only door.
+    # Uncomment to inspect the database from the host:
+    # ports:
+    #   - "5432:5432"
+    networks:
+      - stockflow-net
+    restart: unless-stopped
+
+  pipeline-code:
+    <<: *dagster-image
+    environment:
+      <<: *dagster-env
+    command: [
+      "dagster", "api", "grpc",
+      "-h", "0.0.0.0",
+      "-p", "4000",
+      "-m", "stock_pipeline.definitions",
+    ]
+    networks:
+      - stockflow-net
+    # The gRPC server only needs the pipeline code, not instance storage
+    # env vars, but sharing the block keeps the setup uniform and lets the
+    # ops read their config (symbols, DB creds) from the environment.
+    healthcheck:
+      test: ["CMD-SHELL", "dagster api grpc-health-check -p 4000"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  dagster-webserver:
+    <<: *dagster-image
+    command: [
+      "dagster-webserver",
+      "-h", "0.0.0.0",
+      "-p", "3000",
+      "-w", "workspace.yaml",
+    ]
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      pipeline-code:
+        condition: service_healthy
+    volumes:
+      - ./workspace.yaml:/opt/dagster/workspace.yaml:ro
+
+  dagster-daemon:
+    <<: *dagster-image
+    command: [
+      "dagster-daemon",
+      "run",
+      "-w", "workspace.yaml",
+    ]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      pipeline-code:
+        condition: service_healthy
+    volumes:
+      - ./workspace.yaml:/opt/dagster/workspace.yaml:ro
+    networks:
+      - stockflow-net
+
+networks:
+  stockflow-net:
+
+volumes:
+  stockflow-pgdata:
